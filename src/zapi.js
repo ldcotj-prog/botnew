@@ -1,83 +1,91 @@
-// zapi.js — Integração com a Z-API
+// zapi.js — Z-API com suporte multi-instância
 const axios = require('axios');
-const cfg = require('./config');
+const cfg   = require('./config');
 
-const headers = () => ({
-  'Client-Token': cfg.zapi.clientToken,
-  'Content-Type': 'application/json',
-});
+// Bot principal usado para enviar notificações ao atendente
+const BOT_NOTIF = () => cfg.BOTS.concursos.instanceId ? 'concursos' : Object.keys(cfg.BOTS)[0];
 
-// Envia mensagem de texto
-async function texto(tel, msg) {
-  if (!msg || !tel) return;
+// ── Envia texto para um cliente ──────────────────────────────
+async function texto(botId, tel, msg) {
+  if (!msg || !tel || !botId) return;
   try {
-    const r = await axios.post(
-      `${cfg.zapi.url()}/send-text`,
+    await axios.post(
+      `${cfg.zapiUrl(botId)}/send-text`,
       { phone: String(tel), message: String(msg) },
-      { headers: headers() }
+      { headers: cfg.zapiHeaders(botId) }
     );
-    console.log(`[ZAPI] texto OK → ${tel}`);
-    return r.data;
+    console.log(`[ZAPI:${botId}] ✅ → ${tel}`);
   } catch (e) {
-    console.error('[ZAPI] texto ERR:', e.response?.data || e.message);
+    console.error(`[ZAPI:${botId}] ❌`, e.response?.data || e.message);
   }
 }
 
-// Envia link do Google Drive como mensagem
-async function apostila(tel, driveId, titulo, nome) {
+// ── Envia link de apostila (Google Drive) ────────────────────
+async function apostila(botId, tel, driveId, titulo, nome) {
   const url = cfg.driveLink(driveId);
-  const msg =
-`📄 *${titulo}*
-
-📥 Acesse sua apostila aqui:
-${url}
-
-Bons estudos, *${nome || 'aluno(a)'}*! 🎓
-_Smart Cursos Unaí — Sua aprovação é nossa missão!_`;
-  return texto(tel, msg);
+  await texto(botId, tel,
+    `📄 *${titulo}*\n\n📥 Acesse sua apostila:\n${url}\n\nBons estudos, *${nome || 'aluno(a)'}*! 🎓\n_Smart Cursos Unaí_`
+  );
 }
 
-// Notifica o atendente sobre um lead
-async function notificar(telCliente, nome, origem) {
+// ── Envia notificação direta ao atendente (38999313182) ──────
+async function notificarAtendente(msg) {
+  const bot = BOT_NOTIF();
+  try {
+    await axios.post(
+      `${cfg.zapiUrl(bot)}/send-text`,
+      { phone: String(cfg.atendente), message: String(msg) },
+      { headers: cfg.zapiHeaders(bot) }
+    );
+    console.log(`[ZAPI] 🔔 Notificação → ${cfg.atendente}`);
+  } catch (e) {
+    console.error('[ZAPI] notificarAtendente ERR:', e.response?.data || e.message);
+  }
+}
+
+// ── Notifica atendente sobre lead (pedido atendente / visita) ─
+async function notificar(botId, tel, origem, extra) {
   const hora = new Date().toLocaleTimeString('pt-BR', {
     timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit',
   });
   const msg =
-`🔔 *LEAD AGUARDANDO*
+`🔔 *LEAD — ${(cfg.BOTS[botId]?.nome || botId).toUpperCase()}*
 
-👤 *${nome || 'não informado'}*
-📱 ${telCliente}
+👤 *${extra?.nome || 'não informado'}*
+📱 ${tel}
 📍 ${origem}
 🕐 ${hora}
 
 _Clique no número pra responder!_ 👆`;
-  return texto(cfg.atendente, msg);
+  await notificarAtendente(msg);
 }
 
-// Encaminha comprovante não reconhecido para confirmação manual
-async function comprovante(telCliente, nome, produto, imgUrl) {
+// ── Envia comprovante para confirmação manual ─────────────────
+async function comprovante(botId, tel, nome, produto, imgUrl) {
   const msg =
-`📨 *COMPROVANTE PARA VERIFICAR*
+`📨 *COMPROVANTE PARA CONFIRMAR*
 
 👤 *${nome || '?'}*
-📱 ${telCliente}
+📱 ${tel}
 🛒 ${produto}
 
-Confirme o pagamento respondendo:
-CONFIRMAR ${telCliente}
-ou
-RECUSAR ${telCliente}`;
-  await texto(cfg.atendente, msg);
-  // Tenta encaminhar a imagem
+Para confirmar e liberar o material, responda:
+✅ *CONFIRMAR ${botId} ${tel}*
+
+Para recusar:
+❌ *RECUSAR ${botId} ${tel}*`;
+
+  await notificarAtendente(msg);
+
   if (imgUrl) {
+    const bot = BOT_NOTIF();
     try {
-      await axios.post(
-        `${cfg.zapi.url()}/send-image`,
-        { phone: String(cfg.atendente), image: imgUrl, caption: 'Comprovante do cliente acima' },
-        { headers: headers() }
-      );
+      await axios.post(`${cfg.zapiUrl(bot)}/send-image`,
+        { phone: String(cfg.atendente), image: imgUrl, caption: `Comprovante de ${nome || tel}` },
+        { headers: cfg.zapiHeaders(bot) }
+      ).catch(() => {});
     } catch {}
   }
 }
 
-module.exports = { texto, apostila, notificar, comprovante };
+module.exports = { texto, apostila, notificar, notificarAtendente, comprovante };

@@ -73,13 +73,48 @@ app.post('/webhook/:botId', async (req, res) => {
       return;
     }
 
+    // ── Comandos CONFIRMAR / RECUSAR (confirmação manual de PIX) ──
+    // Formato: CONFIRMAR concursos 5538XXXXX
+    //          RECUSAR   concursos 5538XXXXX
+    if (txt.toUpperCase().startsWith('CONFIRMAR ') || txt.toUpperCase().startsWith('RECUSAR ')) {
+      const partes = txt.trim().split(/\s+/);
+      const acao   = partes[0].toUpperCase();
+      // Suporta com ou sem botId: "CONFIRMAR 5538XXX" ou "CONFIRMAR concursos 5538XXX"
+      const alvo   = (partes.length >= 3 ? partes[2] : partes[1])?.replace(/\D/g, '');
+      const bAlvo  = partes.length >= 3 ? partes[1] : botId;
+      if (alvo && BOTS[bAlvo]) {
+        const sAlvo = getSession(bAlvo, alvo);
+        if (acao === 'CONFIRMAR' && sAlvo.pedido) {
+          const bot2 = BOTS[bAlvo];
+          if (bot2.confirmarPedido) await bot2.confirmarPedido(alvo, sAlvo);
+          console.log(`[${bAlvo}] ✅ Pedido confirmado manualmente → ${alvo}`);
+        } else if (acao === 'RECUSAR') {
+          set(bAlvo, alvo, { etapa: 'aguarda_pix' });
+          const bot2 = BOTS[bAlvo];
+          if (bot2.recusarPedido) await bot2.recusarPedido(alvo, sAlvo);
+          console.log(`[${bAlvo}] ❌ Pedido recusado → ${alvo}`);
+        }
+      }
+      return;
+    }
+
     // ── Verifica se bot está pausado para esse número ─────────
     const s = getSession(botId, tel);
-    if (s.humano) { console.log(`[${botId}] 🔕 Ignorado (humano ativo) → ${tel}`); return; }
+    if (s.humano) {
+      console.log(`[${botId}] 🔕 Ignorado (humano ativo) → ${tel}`);
+      return;
+    }
 
     // ── Extrai dados da mensagem ──────────────────────────────
     const dados = extrair(b);
     if (!dados) return;
+
+    // ── Se está em PIX_ENVIADO, só aceita confirmação via comando
+    // do atendente — ignora mensagens do cliente para evitar loop
+    if (s.etapa === 'pix_enviado' && dados.tipo === 'texto') {
+      console.log(`[${botId}] ⏳ PIX_ENVIADO — aguardando confirmação manual → ${tel}`);
+      return;
+    }
 
     // ── Processa no bot correto ───────────────────────────────
     await bot.processar(tel, dados);
